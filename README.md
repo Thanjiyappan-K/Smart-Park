@@ -1,314 +1,333 @@
-# SmartPark - Authentication Module
+# SmartPark
 
-Complete authentication and authorization system for SmartPark parking management application.
+Parking management backend: registration and login, parking discovery and owner workflows, bookings with scheduled lifecycle jobs, and **Stripe Connect** payments (intents, webhooks, refunds, owner payouts). All APIs are served under a single context path.
 
 ## Features
 
-✅ **User Registration**
-- Register as DRIVER (automatically ACTIVE)
-- Register as PARKING_OWNER (PENDING_VERIFICATION status)
+### Authentication and users
 
-✅ **Authentication**
-- Login with email or phone number
-- JWT-based token generation
-- Refresh token support (7 days expiry)
+- **User registration**
+  - Register as **DRIVER** (status **ACTIVE** immediately).
+  - Register as **PARKING_OWNER** (status **PENDING_VERIFICATION** until an admin verifies the account).
 
-✅ **Authorization**
-- Role-based access control (DRIVER, PARKING_OWNER, ADMIN)
-- JWT filter for automatic token validation
-- Method-level security with `@PreAuthorize`
+- **Authentication**
+  - Login with **email or phone** and password.
+  - **JWT** access tokens and **refresh tokens** (configurable expiry).
+  - **Logout** with optional `Authorization: Bearer` header to blacklist the access token.
 
-✅ **Admin Features**
-- Verify parking owners
-- View pending owners
-- Block/unblock users
+- **Authorization**
+  - Roles: **DRIVER**, **PARKING_OWNER**, **ADMIN**.
+  - Stateless **JWT filter** on protected routes.
+  - **Method-level security** with `@PreAuthorize` where used (e.g. admin user APIs).
 
-✅ **Security**
-- BCrypt password encoding
-- Token blacklist for logout
-- Automatic token cleanup
+- **Admin (users)**
+  - Verify parking owners, list pending owners, block/unblock users.
 
-## Tech Stack
+- **Security**
+  - **BCrypt** password encoding.
+  - **Token blacklist** for logout.
+  - Scheduled cleanup of expired blacklist entries (existing auth behavior).
 
-- **Spring Boot 3.2.0**
-- **Spring Security** - Authentication & Authorization
-- **Spring Data JPA** - Database operations
-- **MySQL** - Database
-- **JWT (JJWT 0.12.3)** - Token management
-- **Lombok** - Boilerplate reduction
-- **Validation** - Request validation
+### Parking
 
-## Project Structure
+- **Public discovery** (no JWT)
+  - **Geographic search**: latitude, longitude, radius (km), optional filters (vehicle type, price range, city), pagination.
+  - **Details by id** for published, active, approved listings.
+
+- **Owner workspace** (JWT, **PARKING_OWNER**)
+  - Create and update **parking spaces** (location, slots, pricing, vehicle type, images metadata as modeled).
+  - List own parkings (paginated); get single parking for owner.
+  - **Activate / deactivate** a parking (owner-controlled availability).
+  - **Per-parking dashboard** and **aggregate dashboards** (revenue/booking-oriented summaries via dashboard provider).
+
+- **Admin parking moderation** (JWT, **ADMIN**)
+  - List **pending verification** listings.
+  - **Approve** (publish) or **reject** (reason required for reject).
+  - **Force-disable** a parking (with audit trail via admin actions).
+
+- **Operational extras**
+  - **Redis-backed** caching for availability-related reads (TTL configurable).
+  - **Scheduled jobs**: parking reconciliation (e.g. slot consistency), daily stats rollups (cron in `application.yml`).
+
+### Booking
+
+- **Driver** (JWT, **DRIVER**)
+  - **Create booking** for a time window (`parkingId`, `startTime`, `endTime`); transitions through **PENDING_PAYMENT** after creation.
+  - **Cancel** booking (rules respect cancellation cutoff configuration).
+  - **Get by id**, **paginated history**, list **pending payment** bookings.
+
+- **Owner** (JWT, **PARKING_OWNER**)
+  - List bookings for **one parking** or **all parkings** owned (paginated).
+
+- **Admin** (JWT, **ADMIN**)
+  - Paginated **all bookings**, **get by id**, **force-cancel** with audited reason.
+
+- **Internal integration**
+  - **Payment callback** (`/booking/internal/payment-callback`) for transitioning booking state after payment success/failure (authenticated; intended for trusted callers / payment module).
+
+- **Scheduled jobs**
+  - Cleanup of stale **pending payment** bookings, **completion** of elapsed sessions, **reconciliation** (cron values in `application.yml`).
+
+### Payments (Stripe)
+
+- **Driver**
+  - **Create PaymentIntent** for a booking in **PENDING_PAYMENT** (`clientSecret` / publishable key flow for the client).
+
+- **Shared**
+  - **Get payment** by id or **by booking id** (access enforced: driver or owning parking owner as applicable).
+  - **Refund** (admin or owner flow as implemented in `PaymentService`).
+
+- **Parking owners — Stripe Connect Express**
+  - **Onboarding URL** (`/payment/owner/connect/onboard`) to create/link Connect account; **success** return URL handler.
+  - **Payout ledger**: paginated list of payout records for the authenticated owner.
+
+- **Platform**
+  - **Stripe webhooks** at `/webhooks/stripe` (signature verification, idempotent processing).
+  - **Platform fee** percentage and default currency configurable.
+  - **Payment reconciliation** scheduled job.
+
+### Observability and configuration
+
+- **Spring Boot Actuator**: health, info, metrics, prometheus (see `management.endpoints` in `application.yml`).
+- **Structured logging** to console and rolling file (`logs/smartpark.log`).
+- **`.env` support**: project-root `.env` is loaded at startup into system properties (does not override OS environment variables).
+
+## Tech stack
+
+| Layer | Technology |
+|--------|------------|
+| Runtime | Java 17, Spring Boot 3.2.x |
+| Web & validation | Spring Web, Bean Validation |
+| Security | Spring Security, JWT (JJWT 0.12.3) |
+| Persistence | Spring Data JPA, Hibernate, MySQL 8 |
+| Cache | Spring Data **Redis** |
+| Payments | **Stripe Java** SDK (Connect, PaymentIntents, Webhooks) |
+| Config | `application.yml`, environment variables, **dotenv-java** |
+| Observability | **Spring Boot Actuator** |
+| Utilities | Lombok |
+
+## Base URL
+
+All REST paths below are relative to:
+
+`http://localhost:8080/api`
+
+Example: login is `POST http://localhost:8080/api/auth/login`.
+
+## Project structure (high level)
 
 ```
 com.smartpark
- ├── auth
- │   ├── controller
- │   │   ├── AuthController.java
- │   │   └── AdminController.java
- │   ├── service
- │   │   ├── AuthService.java
- │   │   ├── AdminService.java
- │   │   └── BlacklistService.java
- │   ├── dto
- │   │   ├── RegisterRequest.java
- │   │   ├── LoginRequest.java
- │   │   ├── AuthResponse.java
- │   │   └── RefreshTokenRequest.java
- │   ├── jwt
- │   │   └── JwtService.java
- │   ├── entity
- │   │   ├── RefreshToken.java
- │   │   └── TokenBlacklist.java
- │   └── repository
- │       ├── RefreshTokenRepository.java
- │       └── TokenBlacklistRepository.java
- ├── user
- │   ├── entity
- │   │   └── User.java
- │   ├── repository
- │   │   └── UserRepository.java
- │   └── enums
- │       ├── Role.java
- │       └── UserStatus.java
- ├── common
- │   ├── exception
- │   │   └── GlobalExceptionHandler.java
- │   ├── response
- │   │   └── ApiResponse.java
- │   └── security
- │       ├── SecurityConfig.java
- │       └── JwtAuthFilter.java
- └── SmartParkApplication.java
+├── SmartParkApplication.java
+├── config
+│   └── SchedulerConfig.java
+├── auth
+│   ├── controller      (AuthController, AdminController)
+│   ├── dto
+│   ├── entity          (RefreshToken, TokenBlacklist)
+│   ├── jwt             (JwtService)
+│   ├── repository
+│   └── service         (Auth, Admin, Blacklist)
+├── user
+│   ├── entity          (User)
+│   ├── enums           (Role, UserStatus)
+│   └── repository
+├── parking
+│   ├── controller      (Public, Owner, Admin)
+│   ├── dto
+│   ├── entity
+│   ├── enums
+│   ├── exception
+│   ├── job
+│   ├── repository
+│   └── service
+├── booking
+│   ├── controller      (Driver, Owner, Admin, Internal callback)
+│   ├── dto
+│   ├── entity
+│   ├── enums
+│   ├── job
+│   ├── repository
+│   └── service
+├── payment
+│   ├── config          (StripeConfig)
+│   ├── controller      (Payment, Connect, Payout, StripeWebhook)
+│   ├── dto
+│   ├── entity
+│   ├── enums
+│   ├── exception
+│   ├── job
+│   ├── repository
+│   └── service
+└── common
+    ├── exception       (GlobalExceptionHandler)
+    ├── response        (ApiResponse)
+    └── security        (SecurityConfig, JwtAuthFilter)
 ```
 
-## Database Setup
+## Database setup
 
-1. Create MySQL database:
+1. **Create database** (or rely on `createDatabaseIfNotExist` in JDBC URL):
+
 ```sql
 CREATE DATABASE smartpark;
 ```
 
-2. Update `application.yml` with your MySQL credentials:
-```yaml
-spring:
-  datasource:
-    url: jdbc:mysql://localhost:3306/smartpark
-    username: root
-    password: root
-```
-
-3. Tables will be auto-created by Hibernate (`ddl-auto: update`)
+2. **Credentials** via environment or `.env` (see [Configuration](#configuration)). Hibernate uses `ddl-auto: update` for schema evolution in dev.
 
 ## Configuration
 
-### JWT Configuration
-Update `application.yml`:
-```yaml
-jwt:
-  secret: your-secret-key-here (use a long, secure random string in production)
-  expiration: 86400000 # 1 day in milliseconds
-```
+### Environment variables (common)
 
-## API Endpoints
+| Variable | Purpose |
+|----------|---------|
+| `DB_URL` | JDBC URL (default in yml points at local MySQL `smartpark`) |
+| `DB_USERNAME` | Database user |
+| `DB_PASSWORD` | Database password (**required** unless set elsewhere) |
+| `JWT_SECRET` | Signing secret for JWT (use a long random string in production) |
+| `JWT_EXPIRATION` | Access token TTL (ms) |
+| `JWT_REFRESH_EXPIRATION` | Refresh token TTL (ms) |
+| `REDIS_HOST`, `REDIS_PORT`, `REDIS_TIMEOUT` | Redis connection |
+| `STRIPE_SECRET_KEY`, `STRIPE_PUBLISHABLE_KEY`, `STRIPE_WEBHOOK_SECRET` | Stripe API and webhook verification |
+| `STRIPE_CONNECT_SUCCESS_URL`, `STRIPE_CONNECT_REFRESH_URL` | Connect onboarding return URLs |
 
-### Public Endpoints (No Authentication Required)
+Module-specific knobs (platform fee %, booking timeouts, cron expressions, cache TTL) live under `payment`, `booking`, `parking` in `application.yml`.
 
-#### 1. Register Driver
-```http
-POST /auth/register/driver
-Content-Type: application/json
+## API reference
 
-{
-  "name": "John Doe",
-  "email": "driver@example.com",
-  "phone": "1234567890",
-  "password": "password123"
-}
-```
+Standard envelope:
 
-**Response:**
 ```json
 {
   "success": true,
-  "message": "Driver registered successfully",
-  "data": null
+  "message": "optional",
+  "data": { }
 }
 ```
 
-#### 2. Register Owner
-```http
-POST /auth/register/owner
-Content-Type: application/json
+### Public (no JWT)
 
-{
-  "name": "Jane Smith",
-  "email": "owner@example.com",
-  "phone": "9876543210",
-  "password": "password123"
-}
-```
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/auth/register/driver` | Register driver |
+| POST | `/auth/register/owner` | Register owner (pending verification) |
+| POST | `/auth/login` | Login; returns `token`, `refreshToken`, `role` |
+| POST | `/auth/refresh` | New access token from refresh token body |
+| POST | `/auth/logout` | Optionally send `Authorization: Bearer` to blacklist token |
+| POST | `/parking/public/search` | Geo search (JSON body: lat, lon, radiusKm, optional filters, page, size) |
+| GET | `/parking/public/{parkingId}` | Public parking details |
+| POST | `/webhooks/stripe` | Stripe webhook (raw body + `Stripe-Signature` header) |
 
-**Response:**
-```json
-{
-  "success": true,
-  "message": "Owner registered, pending verification",
-  "data": null
-}
-```
+### Admin — users (`Authorization: Bearer`, role **ADMIN**)
 
-#### 3. Login
-```http
-POST /auth/login
-Content-Type: application/json
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/admin/verify-owner/{id}` | Approve owner account |
+| GET | `/admin/pending-owners` | List owners awaiting verification |
+| POST | `/admin/block-user/{id}` | Block user |
+| POST | `/admin/unblock-user/{id}` | Unblock user |
 
-{
-  "emailOrPhone": "driver@example.com",
-  "password": "password123"
-}
-```
+### Admin — parkings (JWT, **ADMIN**)
 
-**Response:**
-```json
-{
-  "success": true,
-  "message": "Login successful",
-  "data": {
-    "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
-    "refreshToken": "550e8400-e29b-41d4-a716-446655440000",
-    "role": "DRIVER"
-  }
-}
-```
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/parking/admin/pending` | Pending parkings (`page`, `size`) |
+| POST | `/parking/admin/approve` | Body: `parkingId` |
+| POST | `/parking/admin/reject` | Body: `parkingId`, `reason` (required) |
+| POST | `/parking/admin/force-disable` | Body: `parkingId`, optional `reason` |
 
-#### 4. Refresh Token
-```http
-POST /auth/refresh
-Content-Type: application/json
+### Owner — parkings (JWT, **PARKING_OWNER**)
 
-{
-  "refreshToken": "550e8400-e29b-41d4-a716-446655440000"
-}
-```
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/parking/owner` | Create parking |
+| GET | `/parking/owner` | List my parkings |
+| GET | `/parking/owner/{parkingId}` | Get my parking |
+| PUT | `/parking/owner/{parkingId}` | Update |
+| POST | `/parking/owner/{parkingId}/activate` | Activate |
+| POST | `/parking/owner/{parkingId}/deactivate` | Deactivate |
+| GET | `/parking/owner/{parkingId}/dashboard` | Dashboard for one parking |
+| GET | `/parking/owner/dashboards` | All my dashboards |
 
-**Response:**
-```json
-{
-  "success": true,
-  "message": "Token refreshed successfully",
-  "data": {
-    "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
-    "refreshToken": "new-refresh-token-uuid",
-    "role": "DRIVER"
-  }
-}
-```
+### Driver — bookings (JWT, **DRIVER**)
 
-#### 5. Logout
-```http
-POST /auth/logout
-Authorization: Bearer <JWT_TOKEN>
-```
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/booking/driver` | Create booking (`parkingId`, `startTime`, `endTime`) |
+| POST | `/booking/driver/{bookingId}/cancel` | Cancel |
+| GET | `/booking/driver/{bookingId}` | Detail |
+| GET | `/booking/driver/history` | Paginated history |
+| GET | `/booking/driver/pending-payment` | Bookings awaiting payment |
 
-**Response:**
-```json
-{
-  "success": true,
-  "message": "Logged out successfully",
-  "data": null
-}
-```
+### Owner — bookings (JWT, **PARKING_OWNER**)
 
-### Admin Endpoints (Requires ADMIN Role)
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/booking/owner/parking/{parkingId}` | Bookings for a parking |
+| GET | `/booking/owner` | All bookings for owner’s parkings |
 
-All admin endpoints require JWT token with ADMIN role in header:
-```http
-Authorization: Bearer <JWT_TOKEN>
-```
+### Admin — bookings (JWT, **ADMIN**)
 
-#### 1. Verify Owner
-```http
-POST /admin/verify-owner/{id}
-```
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/booking/admin` | All bookings (paged) |
+| GET | `/booking/admin/{bookingId}` | Detail |
+| POST | `/booking/admin/force-cancel` | Body: booking id + reason (audited) |
 
-**Response:**
-```json
-{
-  "success": true,
-  "message": "Owner verified successfully",
-  "data": null
-}
-```
+### Internal — booking (JWT, any authenticated principal)
 
-#### 2. Get Pending Owners
-```http
-GET /admin/pending-owners
-```
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/booking/internal/payment-callback` | Payment outcome callback for booking state transitions |
 
-**Response:**
-```json
-{
-  "success": true,
-  "message": "Pending owners retrieved successfully",
-  "data": [
-    {
-      "id": 2,
-      "name": "Jane Smith",
-      "email": "owner@example.com",
-      "phone": "9876543210",
-      "role": "PARKING_OWNER",
-      "status": "PENDING_VERIFICATION",
-      ...
-    }
-  ]
-}
-```
+### Payments (JWT; roles enforced per endpoint)
 
-#### 3. Block User
-```http
-POST /admin/block-user/{id}
-```
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/payment/driver/create-intent` | **DRIVER** — body: `bookingId`, optional `idempotencyKey` |
+| GET | `/payment/by-booking/{bookingId}` | Payment for booking (authorized parties) |
+| GET | `/payment/{paymentId}` | Payment by id |
+| POST | `/payment/refund` | Refund request (owner/admin per service rules) |
+| GET | `/payment/owner/connect/onboard` | **PARKING_OWNER** — Stripe Connect onboarding URL |
+| GET | `/payment/owner/connect/success` | Post-onboarding landing (success message) |
+| GET | `/payment/owner/payouts` | **PARKING_OWNER** — paged payout ledger |
 
-#### 4. Unblock User
-```http
-POST /admin/unblock-user/{id}
-```
+## User roles and statuses
 
-## User Roles
+**Roles**
 
-- **DRIVER**: Can book parking spots
-- **PARKING_OWNER**: Can manage parking lots (requires admin verification)
-- **ADMIN**: Can verify owners and manage users
+- **DRIVER**: Search parkings, book, pay, cancel within rules.
+- **PARKING_OWNER**: Manage listings, see bookings, Connect onboarding, payouts, refunds where allowed.
+- **ADMIN**: Verify owners, moderate parkings, manage users, view all bookings, force-cancel.
 
-## User Status
+**User status**
 
-- **ACTIVE**: User can login and use the system
-- **PENDING_VERIFICATION**: Owner waiting for admin approval
-- **BLOCKED**: User cannot login
+- **ACTIVE**: Can sign in.
+- **PENDING_VERIFICATION**: Owner awaiting admin verification.
+- **BLOCKED**: Cannot sign in.
 
-## Security Features
+**Parking verification** (`VerificationStatus`): **PENDING**, **APPROVED**, **REJECTED**.
 
-1. **Password Encryption**: BCrypt with strength 10
-2. **JWT Tokens**: 
-   - Access token: 1 day expiry
-   - Refresh token: 7 days expiry
-3. **Token Blacklist**: Logged out tokens are invalidated
-4. **Role-Based Access**: Method-level security with `@PreAuthorize`
-5. **Automatic Token Validation**: JWT filter validates every request
+**Booking status** (simplified flow): **INITIATED** → **PENDING_PAYMENT** → **BOOKED** → **COMPLETED**; terminal states include **CANCELLED**, **REFUNDED**, **NO_SHOW** (see `BookingStatus` in code).
 
-## Creating Admin User
+## Security notes
 
-To create an admin user, you can either:
+1. **Passwords**: BCrypt.
+2. **JWT**: Access + refresh; blacklist on logout when token is sent.
+3. **Stripe webhooks**: Verify `Stripe-Signature`; events processed idempotently.
+4. **Production**: Set strong `JWT_SECRET`, real Stripe keys, restrict `/booking/internal` to internal networks or shared secrets if you harden beyond default JWT-only auth.
 
-1. **Use SQL directly:**
+## Creating an admin user
+
+**SQL example** (hash below is illustrative; generate your own BCrypt hash for production):
+
 ```sql
 INSERT INTO users(name, email, phone, password, role, status, created_at, updated_at)
 VALUES (
   'Admin',
   'admin@smartpark.com',
   '9999999999',
-  '$2a$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy', -- password: admin123
+  '$2a$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy',
   'ADMIN',
   'ACTIVE',
   NOW(),
@@ -316,40 +335,26 @@ VALUES (
 );
 ```
 
-2. **Or create a data initialization script** (recommended for production)
+## Running the application
 
-## Running the Application
+1. Start **MySQL** and **Redis** (Redis used for parking availability cache).
+2. Set `DB_PASSWORD` and other env vars (or `.env`).
+3. From project root:
 
-1. Ensure MySQL is running
-2. Update database credentials in `application.yml`
-3. Run:
 ```bash
 mvn spring-boot:run
 ```
 
-The application will start on `http://localhost:8080`
+4. App listens on port **8080** with context path **`/api`**.
 
-## Testing with Postman
+## Postman / client tips
 
-1. **Register a driver:**
-   - POST `/auth/register/driver`
-   - Body: JSON with name, email, phone, password
+1. Register and login; copy `token` from `data.token`.
+2. Send header `Authorization: Bearer <token>` on protected routes.
+3. Driver flow: search → create booking → `POST /payment/driver/create-intent` → complete payment on client with Stripe → webhooks update backend state.
+4. Owner flow: create parking → wait for admin approval → activate listing → connect Stripe via `/payment/owner/connect/onboard`.
 
-2. **Login:**
-   - POST `/auth/login`
-   - Body: JSON with emailOrPhone and password
-   - Copy the `token` from response
+## Roadmap / not in this repo
 
-3. **Access protected endpoint:**
-   - Add header: `Authorization: Bearer <token>`
-   - Example: GET `/admin/pending-owners` (requires ADMIN role)
+- **Review / ratings** module for parkings or owners is not implemented yet; JWT and roles are ready for future endpoints.
 
-## Next Steps
-
-After authentication module is complete, you can build:
-- Parking module
-- Booking module
-- Payment module
-- Review module
-
-All these modules will use the JWT authentication and role-based authorization already implemented.
