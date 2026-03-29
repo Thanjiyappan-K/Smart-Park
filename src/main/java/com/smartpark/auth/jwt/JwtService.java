@@ -4,6 +4,8 @@ import com.smartpark.user.entity.User;
 import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.Jwts;
 import io.jsonwebtoken.security.Keys;
+import jakarta.annotation.PostConstruct;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
@@ -13,13 +15,28 @@ import java.util.Date;
 import java.util.function.Function;
 
 @Service
+@Slf4j
 public class JwtService {
 
-    @Value("${jwt.secret}")
+    @Value("${jwt.secret:}")
     private String secret;
 
     @Value("${jwt.expiration}")
     private long expiration;
+
+    @PostConstruct
+    public void validateSecret() {
+        if (secret == null || secret.isBlank()) {
+            String errorMsg = "JWT_SECRET is not configured. Please set the JWT_SECRET environment variable or add it to your .env file. " +
+                    "See ENV_SETUP.md for instructions.";
+            log.error(errorMsg);
+            throw new IllegalStateException(errorMsg);
+        }
+        if (secret.length() < 32) {
+            log.warn("⚠️  JWT_SECRET is too short ({} chars). Recommended minimum: 32 characters for security.", secret.length());
+        }
+        log.info("✓ JWT_SECRET loaded successfully");
+    }
 
     private SecretKey getSigningKey() {
         return Keys.hmacShaKeyFor(secret.getBytes(StandardCharsets.UTF_8));

@@ -1,0 +1,132 @@
+server:
+  port: 8080
+  servlet:
+    context-path: /api
+
+spring:
+  application:
+    name: SmartPark
+  
+  datasource:
+    url: ${DB_URL:jdbc:mysql://localhost:3306/smartpark?createDatabaseIfNotExist=true}
+    username: ${DB_USERNAME:root}
+    password: ${DB_PASSWORD}
+    # HikariCP Connection Pool Configuration
+    hikari:
+      # Disable autocommit so Spring/Hibernate can manage transactions (fixes "Unable to commit against JDBC Connection")
+      auto-commit: false
+      # Maximum number of connections in the pool
+      maximum-pool-size: 10
+      # Minimum number of idle connections maintained
+      minimum-idle: 5
+      # Maximum time to wait for a connection (milliseconds)
+      connection-timeout: 30000
+      # Maximum time a connection can be idle before being removed (milliseconds)
+      idle-timeout: 600000
+      # Maximum lifetime of a connection (milliseconds)
+      max-lifetime: 1800000
+      # Connection pool name for monitoring
+      pool-name: SmartParkHikariPool
+      # Test connection validity before use
+      connection-test-query: SELECT 1
+
+  jpa:
+    hibernate:
+      ddl-auto: update
+    show-sql: false
+    properties:
+      hibernate:
+        format_sql: true
+        dialect: org.hibernate.dialect.MySQL8Dialect
+        jdbc:
+          batch_size: 20
+          fetch_size: 50
+        order_inserts: true
+        order_updates: true
+        # Connection pool settings
+        connection:
+          provider_disables_autocommit: true
+
+  # Redis (optional - defaults to localhost:6379)
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      timeout: ${REDIS_TIMEOUT:2000}ms
+
+  # Application name for actuator
+  web:
+    resources:
+      cache:
+        period: 3600
+
+# ===== JWT Configuration =====
+# ⚠️  IMPORTANT: Set JWT_SECRET via environment variables or .env file in production
+# Default development secret (change in production!)
+jwt:
+  secret: ${JWT_SECRET:dev-secret-key-change-this-in-production-use-a-long-secure-random-string-at-least-32-chars}
+  expiration: ${JWT_EXPIRATION:86400000} # 1 day in milliseconds
+  refresh-expiration: ${JWT_REFRESH_EXPIRATION:604800000} # 7 days in milliseconds
+
+# ===== Stripe Configuration (Stripe Connect Express) =====
+# ⚠️  IMPORTANT: Set via environment variables or .env file - DO NOT hardcode keys in production
+# Format: STRIPE_SECRET_KEY, STRIPE_PUBLISHABLE_KEY, STRIPE_WEBHOOK_SECRET
+stripe:
+  secret-key: ${STRIPE_SECRET_KEY:sk_test_placeholder}
+  publishable-key: ${STRIPE_PUBLISHABLE_KEY:pk_test_placeholder}
+  webhook-signing-secret: ${STRIPE_WEBHOOK_SECRET:whsec_placeholder}
+  connect:
+    success-url: ${STRIPE_CONNECT_SUCCESS_URL:http://localhost:3000/owner/connect/success}
+    refresh-url: ${STRIPE_CONNECT_REFRESH_URL:http://localhost:3000/owner/connect/refresh}
+  currency: ${STRIPE_CURRENCY:inr}
+
+# ===== Payment Module Configuration =====
+payment:
+  platform-fee-percent: 10
+  default-currency: inr
+  job:
+    reconciliation-cron: "0 0 2 * * *"   # 2 AM daily
+
+# ===== Parking Module Configuration =====
+parking:
+  cache:
+    ttl-seconds: 45
+  job:
+    reconciliation-cron: "0 */5 * * * *"   # every 5 minutes
+    daily-stats-cron: "0 0 1 * * *"        # 1 AM daily
+
+# ===== Booking Module Configuration =====
+booking:
+  pending-payment-timeout-minutes: 10
+  cancellation-cutoff-minutes: 60
+  job:
+    pending-cleanup-cron: "0 */2 * * * *"   # every 2 minutes
+    completion-cron: "0 */5 * * * *"        # every 5 minutes
+    reconciliation-cron: "0 0 */1 * * *"    # every hour
+
+# ===== Logging Configuration =====
+logging:
+  level:
+    root: INFO
+    com.smartpark: DEBUG
+    org.springframework.security: DEBUG
+    org.springframework.web: INFO
+    org.hibernate.SQL: DEBUG
+    org.hibernate.type.descriptor.sql.BasicBinder: TRACE
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss} - %msg%n"
+    file: "%d{yyyy-MM-dd HH:mm:ss} [%thread] %-5level %logger{36} - %msg%n"
+  file:
+    name: logs/smartpark.log
+    max-size: 10MB
+    max-history: 10
+
+# ===== Actuator Configuration =====
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+  endpoint:
+    health:
+      show-details: always
